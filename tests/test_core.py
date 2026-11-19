@@ -6,6 +6,8 @@ import pytest
 
 from pathlib import Path
 from app.core import ARTICLE_BOUNDARY, load_corpus, milestone_1, normalize_text, prepare_corpus_text, train_val_split
+import torch
+from app.core import BPETokenizer, TokenAndPositionalEmbedding, milestone_2
 
 # Milestone 1: Gather a small corpus of sports commentary or news articles.
 def test_milestone_1(tmp_path: Path):
@@ -35,9 +37,39 @@ def test_milestone_1(tmp_path: Path):
 
 
 # Milestone 2: Implement the byte-pair tokenizer and create embeddings from the sports text.
-@pytest.mark.skip(reason="remove this line when you start milestone 2")
 def test_milestone_2():
-    raise NotImplementedError("write the test for milestone 2")
+    corpus = milestone_1()["text"]
+    tok = BPETokenizer().train(corpus, vocab_size=400)
+    assert tok.vocab_size == 400
+    assert len(tok.merges) == 400 - 256
+
+    # Edge cases: empty, single char, punctuation, unseen Unicode/emoji
+    assert tok.encode("") == []
+    assert tok.decode([]) == ""
+    for sample in [
+        "a",
+        "Goal! 90+3' — top-corner volley!",
+        "⚽🏀🏏⚾🎾 café naïve résumé — 100%",
+    ]:
+        ids = tok.encode(sample)
+        assert len(ids) >= 1
+        assert tok.decode(ids) == sample
+
+    # Serialization roundtrip
+    restored = BPETokenizer.from_dict(tok.to_dict())
+    assert restored.vocab_size == tok.vocab_size
+    assert restored.encode("striker volley goal") == tok.encode("striker volley goal")
+
+    # Token + positional embeddings
+    emb = TokenAndPositionalEmbedding(vocab_size=tok.vocab_size, block_size=32, d_model=64, dropout=0.0)
+    x = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    out = emb(x)
+    assert out.shape == (1, 4, 64)
+    with pytest.raises(ValueError, match="exceeds block_size"):
+        emb(torch.zeros((1, 33), dtype=torch.long))
+
+    m2 = milestone_2(corpus, vocab_size=320, d_model=64, block_size=48)
+    assert m2["embedding_shape"][0] == 1 and m2["embedding_shape"][2] == 64
 
 
 # Milestone 3: Build the causal self-attention mechanism and assemble the transformer block.
