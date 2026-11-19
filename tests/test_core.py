@@ -11,6 +11,7 @@ from app.core import BPETokenizer, TokenAndPositionalEmbedding, milestone_2
 import math
 from app.core import CausalSelfAttention, GPTConfig, milestone_3
 from app.core import get_batch, load_checkpoint, milestone_4, train_model
+from app.core import generate_text, milestone_5
 
 # Milestone 1: Gather a small corpus of sports commentary or news articles.
 def test_milestone_1(tmp_path: Path):
@@ -140,9 +141,44 @@ def test_milestone_4(tmp_path: Path):
 
 
 # Milestone 5: Develop a text generation function to produce short commentary snippets.
-@pytest.mark.skip(reason="remove this line when you start milestone 5")
-def test_milestone_5():
-    raise NotImplementedError("write the test for milestone 5")
+def test_milestone_5(tmp_path: Path):
+    ckpt_path = tmp_path / "gen_test.pt"
+    train_model(
+        checkpoint_path=ckpt_path,
+        vocab_size=360,
+        block_size=32,
+        d_model=64,
+        n_heads=4,
+        n_layers=2,
+        steps=40,
+        batch_size=12,
+        lr=1.5e-3,
+        eval_interval=40,
+        seed=7,
+        verbose=False,
+    )
+    model, tok, _, _ = load_checkpoint(ckpt_path)
+
+    # Greedy determinism
+    g1 = generate_text(model, tok, prompt="Ninety minutes on the clock", max_new_tokens=20, greedy=True)
+    g2 = generate_text(model, tok, prompt="Ninety minutes on the clock", max_new_tokens=20, temperature=0.0)
+    assert len(g1) == 1 and g1[0] == g2[0]
+    assert g1[0].startswith("Ninety minutes on the clock")
+
+    # Empty prompt handling
+    empty_out = generate_text(model, tok, prompt="", max_new_tokens=16, top_k=20, top_p=0.9, seed=11)
+    assert len(empty_out) == 1 and len(empty_out[0]) > 0
+
+    # Prompt exceeding block_size (> 32 tokens) must crop cleanly without crashing
+    long_prompt = " ".join(["The striker chased the diagonal through ball into the box"] * 6)
+    assert len(tok.encode(long_prompt)) > model.config.block_size
+    long_out = generate_text(model, tok, prompt=long_prompt, max_new_tokens=15, greedy=True)
+    assert len(long_out) == 1 and long_out[0].startswith(long_prompt)
+
+    # Multiple snippets
+    multi = milestone_5(prompt="The fast bowler", max_new_tokens=20, num_snippets=3, checkpoint_path=ckpt_path)
+    assert len(multi) == 3
+    assert all(s.startswith("The fast bowler") for s in multi)
 
 
 # Milestone 6: Create a CLI where users can input a prompt and receive generated commentary.

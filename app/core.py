@@ -700,10 +700,121 @@ def milestone_4(steps: int = 80, checkpoint_path: str | Path | None = DEFAULT_CH
     return train_model(steps=steps, checkpoint_path=checkpoint_path, verbose=False)
 
 
-# --- Milestone 5: Develop a text generation function to produce short commentary snippets.
-# Hint: Sampling; Greedy Decoding
-def milestone_5():  # TODO(milestone 5)
-    raise NotImplementedError("TODO(milestone 5)")
+# ---------------------------------------------------------------------------
+# Milestone 5: Text Generation (Greedy Decoding, Temperature, Top-k, Top-p)
+# ---------------------------------------------------------------------------
+
+def sample_next_token(
+    logits: torch.Tensor,
+    temperature: float = 0.8,
+    top_k: int | None = 40,
+    top_p: float | None = 0.9,
+    greedy: bool = False,
+) -> torch.Tensor:
+    """Select the next token ID from `(B, vocab_size)` logits via greedy or filtered sampling."""
+    if greedy or temperature <= 0.0:
+        return torch.argmax(logits, dim=-1, keepdim=True)
+
+    scaled = logits / temperature
+    vocab_size = scaled.size(-1)
+
+    if top_k is not None and 0 < top_k < vocab_size:
+        top_vals, _ = torch.topk(scaled, top_k, dim=-1)
+        cutoff = top_vals[:, [-1]]
+        scaled = scaled.masked_fill(scaled < cutoff, float("-inf"))
+
+    if top_p is not None and 0.0 < top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(scaled, descending=True, dim=-1)
+        sorted_probs = F.softmax(sorted_logits, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+        # Remove tokens once cumulative probability exceeds top_p, always retaining top-1.
+        sorted_remove = (cumulative_probs - sorted_probs) > top_p
+        sorted_remove[:, 0] = False
+        remove_mask = torch.zeros_like(scaled, dtype=torch.bool).scatter(1, sorted_indices, sorted_remove)
+        scaled = scaled.masked_fill(remove_mask, float("-inf"))
+
+    probs = F.softmax(scaled, dim=-1)
+    return torch.multinomial(probs, num_samples=1)
+
+
+def generate_text(
+    model: SportsGPT,
+    tokenizer: BPETokenizer,
+    prompt: str = "",
+    max_new_tokens: int = 80,
+    temperature: float = 0.8,
+    top_k: int | None = 40,
+    top_p: float | None = 0.9,
+    greedy: bool = False,
+    num_snippets: int = 1,
+    stop_on_article_boundary: bool = True,
+    seed: int | None = None,
+    device: str = "cpu",
+) -> list[str]:
+    """Generate one or more sports commentary snippets from a prompt."""
+    if num_snippets < 1:
+        raise ValueError(f"num_snippets must be >= 1, got {num_snippets}")
+    if max_new_tokens < 1:
+        raise ValueError(f"max_new_tokens must be >= 1, got {max_new_tokens}")
+    if top_k is not None and top_k < 0:
+        raise ValueError(f"top_k must be >= 0, got {top_k}")
+    if top_p is not None and not (0.0 < top_p <= 1.0):
+        raise ValueError(f"top_p must be in (0, 1], got {top_p}")
+
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    prompt_ids = tokenizer.encode(prompt)
+    # Handle empty prompt gracefully by seeding with a newline byte token.
+    seed_ids = prompt_ids if prompt_ids else [ord("\n")]
+    prompt_len = len(prompt_ids)
+
+    model.eval()
+    snippets: list[str] = []
+    for _ in range(num_snippets):
+        idx = torch.tensor([seed_ids], dtype=torch.long, device=device)
+        out_ids = model.generate(
+            idx,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            greedy=greedy,
+        )[0].tolist()
+
+        if prompt_ids:
+            generated_ids = out_ids[prompt_len:]
+            continuation = tokenizer.decode(generated_ids)
+            if stop_on_article_boundary and ARTICLE_BOUNDARY in continuation:
+                head = continuation.split(ARTICLE_BOUNDARY, 1)[0]
+                if head.strip():
+                    continuation = head
+            snippet = f"{prompt}{continuation}".strip()
+        else:
+            decoded = tokenizer.decode(out_ids[len(seed_ids) :])
+            if stop_on_article_boundary and ARTICLE_BOUNDARY in decoded:
+                parts = [p.strip() for p in decoded.split(ARTICLE_BOUNDARY) if p.strip()]
+                decoded = parts[0] if parts else decoded
+            snippet = decoded.strip()
+
+        snippets.append(snippet)
+    return snippets
+
+
+def ensure_trained_checkpoint(
+    checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
+    steps: int = 150,
+    verbose: bool = True,
+) -> Path:
+    """Return existing checkpoint path or fast-train a baseline model if missing."""
+    path = Path(checkpoint_path)
+    if path.exists():
+        return path
+    if verbose:
+        print(f"Checkpoint '{path}' not found. Auto-training baseline SportsGPT ({steps} steps)...")
+    train_model(steps=steps, checkpoint_path=path, verbose=verbose)
+    return path
 
 
 # --- Milestone 6: Create a CLI where users can input a prompt and receive generated commentary.
