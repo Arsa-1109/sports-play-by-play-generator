@@ -1,6 +1,9 @@
-"""Built-in curated corpus of sports news articles and play-by-play commentary."""
+"""Built-in curated and procedurally varied corpus of sports news and play-by-play commentary."""
+from __future__ import annotations
 
-SPORTS_ARTICLES: list[str] = [
+import random
+
+_BASE_ARTICLES: list[str] = [
     (
         "CHAMPIONS CUP FINAL: LATE STRIKER HEROICS SEAL DRAMATIC COMEBACK\n"
         "Ninety minutes on the clock, and the striker ghosted past the back four to meet a whipped cross from the right flank. "
@@ -51,14 +54,6 @@ SPORTS_ARTICLES: list[str] = [
         "Down the stretch, intentional fouls send the veteran guard to the free-throw line, where he sinks four consecutive clutch free throws to ice the victory."
     ),
     (
-        "HOOPS ANALYSIS: DEFENSIVE ROTATIONS AND TRIPLE-DOUBLE DOMINANCE\n"
-        "Finishing with 34 points, 13 rebounds, and 11 assists, the floor general orchestrated every possession with surgical precision. "
-        "Whenever the defense sent a double team at the elbow, he whipped no-look skip passes to open shooters on the opposite wing. "
-        "His court vision dismantled the zone coverage, generating high-percentage corner threes and backdoor cuts to the basket.\n"
-        "Defensively, the wing stoppers communicated through every off-ball screen, contesting mid-range pull-ups without fouling. "
-        "In the final two minutes, a crucial offensive foul drawn in the restricted area halted the comeback bid and sealed a hard-fought road win."
-    ),
-    (
         "TEST CRICKET THRILLER: FINAL OVER DRAMA AND REVERSE SWING MASTERY\n"
         "Six runs needed off the final over with only one wicket standing, and the fast bowler steamed in from the pavilion end with a reversing old ball. "
         "The first delivery was a searing yorker clocked at ninety miles an hour, jammed out cleanly into the covers for a single. "
@@ -73,14 +68,6 @@ SPORTS_ARTICLES: list[str] = [
         "When the leg-spinner came into the attack in the fifteenth over, he struck twice in five balls—first trapping the left-hander plumb in front with a disguised googly, then deceiving the new batter in flight for a sharp stumping.\n"
         "Rebuilding through the middle overs, the captain rotated the strike with nimble singles and quick twos between the wickets before unleashing in the death overs. "
         "A towering pull shot sailed ten rows back over deep midwicket for six, followed by a delicate scoop over fine leg that brought up a match-winning century off ninety-four deliveries."
-    ),
-    (
-        "T20 CRICKET REPORT: POWERPLAY BLITZ AND DEATH-BOWLING EXECUTION\n"
-        "Sent in to bat first, the home side exploded out of the blocks with fifty-eight runs inside the first six overs. "
-        "The fearless opener cleared the front leg and launched three consecutive sixes over long-on against the new-ball attack. "
-        "In response, the fielding captain brought his express pacers back at the death with a packed off-side ring.\n"
-        "Executing wide yorkers outside the tramline, the death bowler conceded just seven runs across the nineteenth over while claiming two key wickets caught at deep cover. "
-        "A brilliant diving catch at long-off on the boundary edge turned the tide, defending a modest total by five runs in a nail-biting finish."
     ),
     (
         "WORLD SERIES BASEBALL: WALK-OFF HOME RUN IN THE BOTTOM OF THE NINTH\n"
@@ -112,82 +99,6 @@ SPORTS_ARTICLES: list[str] = [
         "Throughout the match, high first-serve percentages and aggressive court positioning kept pressure squarely on the returner."
     ),
     (
-        "TACTICAL FOOTBALL NOTEBOOK: HIGH PRESSING AND HALF-SPACE OVERLOADS\n"
-        "Modern attacking play relies on creating numerical superiority in the half-spaces between the opposition center-back and fullback. "
-        "When the inverted winger drifts inside, the central midfielder pushes forward into the pocket, dragging defenders out of position and opening a passing lane into the striker's feet. "
-        "Out of possession, the front three curve their runs to cut off passes to the pivot, forcing rushed clearances into the middle third where aggressive ball-winners step in to intercept and recycle possession immediately."
-    ),
-    (
-        "LATE-GAME BASKETBALL PLAYBOOK: SIDE-OUT BOUNDS EXECUTION AND SWITCHING DEFENSE\n"
-        "With under ten seconds left in a one-possession game, coaching staffs rely on decoy screens and weak-side pin-downs to free their primary scorer. "
-        "If the defense switches every screen aggressively, the offense attacks the mismatch by posting up a smaller guard on the block or clearing out one side for an isolation drive. "
-        "Good box-outs on missed free throws and protecting the basketball against double-team traps decide more playoff series than any single highlight shot."
-    ),
-    (
-        "SEASON FINALE HIGHLIGHTS: ALL-AROUND SPORTING DRAMA ACROSS THE LEAGUE\n"
-        "Championship weekends bring out unforgettable poise under pressure across every arena, pitch, and stadium. "
-        "Whether it is a goalkeeper parrying a stoppage-time header off the goal line, a point guard threading a bounce pass through traffic for a corner three, "
-        "a fast bowler shattering middle stump with a late inswinging yorker, a shortstop turning a barehanded double play up the middle, or a tennis champion saving match point with an angled lob, "
-        "great play-by-play commentary captures both the split-second mechanics and the roaring emotion of the crowd."
-    ),
-    (
-        "EUROPEAN CUP SEMI-FINAL: EARLY PRESSING BREAKTHROUGH AND COUNTERPRESS\n"
-        "From the opening whistle, the hosts pinned the back line inside their own penalty box with a relentless high press. "
-        "Every goal kick was contested fiercely in midfield, forcing hurried clearances back toward the center circle. "
-        "In the twenty-second minute, the attacking midfielder pounced on a loose first touch, slipped a reverse pass between the center-backs, and watched the striker tuck a composed finish inside the near post.\n"
-        "Play-by-play in the seventy-fifth minute: chasing an equalizer, the visitors pushed both fullbacks high up the pitch, leaving acres of space on the counterattack. "
-        "One crisp switch of play from left to right unlocked the defense, allowing the substitute winger to sprint clear and chip the advancing goalkeeper from twenty yards."
-    ),
-    (
-        "OVERTIME BASKETBALL CLASSIC: RIM PROTECTION AND CORNER SHOOTING\n"
-        "Overtime tipoff went to the road team, and the veteran center immediately set the tone by swatting away a driving layup off the backboard. "
-        "Running the floor in transition, the point guard found the trailer at the top of the arc for a clean catch-and-shoot three-pointer that silenced the home crowd.\n"
-        "With thirty-eight seconds on the clock, a tightly contested baseline out-of-bounds play freed the All-Star forward off a staggered double screen. "
-        "He squared his shoulders off the curl, knocked down a silky fadeaway jumper from the right elbow, and drew the foul for a decisive three-point play."
-    ),
-    (
-        "BOXING DAY CRICKET TEST: NEW-BALL SPELL AND SLIP CATCHING\n"
-        "Morning moisture on the pitch offered lively seam movement as the opening bowler hit a nagging fourth-stump channel over after over. "
-        "Drawing the batter forward into a tentative poke outside off stump, the outswinger took a faint outside edge that flew at waist height to second slip for a sharp two-handed catch.\n"
-        "After lunch, the counterattack arrived through fearless strokeplay: a wristy flick through midwicket, a crunching straight drive past the non-striker, and a lofted sweep over square leg that forced the captain to spread the field."
-    ),
-    (
-        "PENNANT RACE BASEBALL: PITCHING DUEL AND CLUTCH TWO-OUT RALLY\n"
-        "With two outs in the bottom of the eighth and a runner dancing off second base, the veteran hitter choked up on the bat and battled through a nine-pitch at-bat. "
-        "Spoiling high ninety-seven-mile-per-hour heaters and laying off sharp sliders in the dirt, he finally got a hanging changeup on the outer half and lashed a double down the left-field line.\n"
-        "The go-ahead run scored standing up as the stadium waved towels in celebration, before the closer slammed the door in the ninth with three consecutive strikeouts on electric high fastballs."
-    ),
-    (
-        "CLAY COURT TENNIS SEMI-FINAL: SLIDING DEFENSE AND DROP-SHOT FINESSE\n"
-        "Three hours deep into a grueling clay-court battle, both players were sliding effortlessly from corner to corner behind the baseline. "
-        "Absorbing heavy topspin forehands two meters behind the line, the defender suddenly disguised a delicate backhand drop shot off a short ball that bounced twice before the opponent reached the service box.\n"
-        "At break point in the fourth set, a fearless inside-out forehand clipped the sideline, bringing up set point which he converted with a crisp crosscourt backhand volley at the net."
-    ),
-    (
-        "DERBY DAY FOOTBALL COMMENTARY: FREE-KICK MAGIC AND DEFENSIVE HEROICS\n"
-        "Twenty-five yards from goal, slightly left of center, the set-piece specialist stood over the ball while the referee paced out the defensive wall. "
-        "With a short three-step run-up, he wrapped his right boot around the ball, sending it dipping fiercely over the jumping wall and crashing off the underside of the crossbar into the net.\n"
-        "In the dying moments, with corners raining into the six-yard box, the center-back threw his body in front of a point-blank half-volley and headed away the final cross as the referee blew the full-time whistle."
-    ),
-    (
-        "PLAYOFF BASKETBALL REPORT: ZONE BREAKER AND CLUTCH REBOUNDING\n"
-        "Facing a stubborn 2-3 zone in the third quarter, the offense flashed its versatile forward to the high post at the free-throw line. "
-        "Once he caught the entry pass, the defense collapsed inward, opening crisp baseline cuts for easy reverse layups and wide-open corner three-pointers.\n"
-        "With six seconds left and trailing by one, a missed runner bounced high off the rim, only for the power forward to soar above three defenders for a thunderous putback dunk at the horn."
-    ),
-    (
-        "CHAMPIONS TROPHY CRICKET: SPIN CHOKE AND FINISHER'S CALM\n"
-        "Defending 264 on a gripping surface, the left-arm spinner bowled unchanged through the middle overs, varying pace and trajectory to dry up boundaries completely. "
-        "After forty-two dot balls built mounting scoreboard pressure, an attempted slog-sweep skied high toward deep square leg where the fielder judged the swirl perfectly.\n"
-        "Yet the finisher stayed calm at the crease, piercing gaps behind point with late cuts and sealing the chase with two towering straight sixes over the sightscreen in the penultimate over."
-    ),
-    (
-        "ICE HOCKEY STANLEY PLAYOFFS: OVERTIME BREAKAWAY AND GLOVE SAVE\n"
-        "Sudden-death overtime in a deafening arena as the center wins the offensive-zone faceoff cleanly back to the point. "
-        "A heavy slapshot caroms off the end boards into the slot, where the defenseman pokes the puck free to ignite a two-on-one rush.\n"
-        "Streaking down the right wing, the winger fakes a saucer pass across the crease, pulls the puck to his backhand, and roofs a crisp wrist shot over the goalie's blocker to win the series."
-    ),
-    (
         "PREMIER FOOTBALL PLAY-BY-PLAY: COUNTERATTACKING GOAL FROM CORNER CLEARANCE\n"
         "Eighty-fourth minute and the visitors defend a crowded six-yard box against an inswinging corner kick. "
         "The towering center-back heads the danger clear to the edge of the area, where the box-to-box midfielder traps the bouncing ball and slips a pass wide.\n"
@@ -217,28 +128,287 @@ SPORTS_ARTICLES: list[str] = [
         "Following the serve straight to the net, he absorbs a low passing shot with a cushioned drop volley that dies just inches over the tape.\n"
         "One point later, an unreturnable ace down the center line seals the set in emphatic style."
     ),
-    (
-        "CHAMPIONS LEAGUE KNOCKOUT: GOALKEEPER HEROICS AND PENALTY BOX DRAMA\n"
-        "Deep into stoppage time, the winger cuts onto his left foot and bends a ferocious strike toward the upper ninety. "
-        "At full stretch, the goalkeeper tips the ball onto the woodwork with his top hand before scrambling across goal to smother the rebound.\n"
-        "From the ensuing counterattack, a diagonal cross finds the unmarked forward at the back post for a clinical diving header."
-    ),
-    (
-        "NBA PLAYOFF SHOOTOUT: TRANSITION THREES AND PAINT DOMINANCE\n"
-        "Opening quarter pace reaches breakneck speed as both backcourts push the ball off every defensive rebound. "
-        "The power forward seals his defender deep in the post, catches the lob pass over the top, and finishes a soft hook shot off the glass.\n"
-        "On the next trip down, a trailing big man pops behind the arc and knocks down a rhythm three-pointer to stretch the lead to double digits."
-    ),
-    (
-        "WORLD CUP CRICKET SEMI-FINAL: POWERPLAY ASSAULT AND BOUNDARY RIDERS\n"
-        "Needing ten runs an over across the final five overs, the middle-order batter clears his front pad and launches a full delivery over wide long-on for six. "
-        "The bowler responds with a disguised off-cutter into the pitch, inducing a miscued loft that swirls high above deep midwicket.\n"
-        "Sprinting twenty yards along the rope, the boundary rider dives forward to complete a breathtaking catch inches above the turf."
-    ),
-    (
-        "OLYMPIC TRACK AND FIELD: 400M HURDLES FINAL SPRINT TO THE LINE\n"
-        "Coming off the tenth and final hurdle shoulder-to-shoulder, the lane-four favorite digs deep into his reserve stride pattern down the home straight. "
-        "Maintaining clean cadence as fatigue sets in, he surges half a stride clear twenty meters from the tape and leans at the finish line to break the championship record by four hundredths of a second."
-    ),
 ]
 
+
+def _generate_football_articles(rng: random.Random) -> list[str]:
+    titles = [
+        "CHAMPIONS CUP PLAY-BY-PLAY",
+        "PREMIER LEAGUE MATCH REPORT",
+        "DERBY NIGHT COMMENTARY",
+        "KNOCKOUT TIE RECAP",
+    ]
+    clocks = [
+        "Ninety minutes on the clock, and the striker",
+        "Seventy-eighth minute on the clock, and the striker",
+        "Deep into stoppage time, and the striker",
+        "Early in the second half, and the winger",
+        "Eighty-fourth minute under the floodlights, and the forward",
+        "Sixty-second minute at the stadium, and the midfielder",
+    ]
+    buildups = [
+        "ghosted past the back four to meet a whipped cross from the right flank",
+        "timed a sharp diagonal run behind the center-back to latch onto a through ball",
+        "dropped into midfield space, spun past two defenders, and drove toward the penalty box",
+        "took a crisp first touch near the edge of the box and shifted onto his stronger foot",
+        "sprinted down the left touchline to collect a long switch of play from the captain",
+    ]
+    finishes = [
+        "His first-time volley kissed the inside of the far post and nestled into the back of the net.",
+        "He curled a low shot around the rushing goalkeeper into the bottom corner as the crowd erupted.",
+        "He buried a thunderous half-volley off the crossbar and down across the goal line.",
+        "He slipped a composed finish between the goalkeeper and the near post from twelve yards out.",
+        "He nodded a towering header back across goal into the top corner past outstretched fingertips.",
+    ]
+    responses = [
+        "Earlier in the half, the visitors controlled midfield possession with crisp one-touch passing and relentless pressing.",
+        "The holding midfielder broke up two dangerous counterattacks before launching a quick pass out wide.",
+        "The goalkeeper kept his side alive moments earlier with a stunning reflex save low to his left.",
+        "Both defensive lines held compact shapes throughout the match, blocking shots from the edge of the box.",
+        "When the fourth official raised the board for added minutes, the home fans rose and roared their side forward.",
+    ]
+    endings = [
+        "A corner kick swung deep to the penalty spot sealed a dramatic comeback victory.",
+        "The clean sheet and late winner moved the club top of the standings on a memorable night.",
+        "The referee blew the full-time whistle seconds later as players celebrated in front of the away end.",
+        "Tactical discipline in midfield and clinical finishing inside the six-yard box decided the contest.",
+        "It was a fearless attacking display that turned a tight tactical battle into a classic cup victory.",
+    ]
+
+    articles: list[str] = []
+    seen: set[str] = set()
+    while len(articles) < 34:
+        title = rng.choice(titles)
+        clock = rng.choice(clocks)
+        buildup = rng.choice(buildups)
+        finish = rng.choice(finishes)
+        resp = rng.choice(responses)
+        end = rng.choice(endings)
+        article = f"{title}: {clock.split(',')[0].upper()}\n{clock} {buildup}. {finish}\n{resp} {end}"
+        if article not in seen:
+            seen.add(article)
+            articles.append(article)
+    return articles
+
+
+def _generate_basketball_articles(rng: random.Random) -> list[str]:
+    titles = [
+        "NBA PLAYOFF PLAY-BY-PLAY",
+        "CONFERENCE FINALS RECAP",
+        "FOURTH-QUARTER CLUTCH REPORT",
+        "ARENA NIGHT COMMENTARY",
+    ]
+    openers = [
+        "With four seconds remaining on the game clock and the score tied,",
+        "With twelve seconds left in the fourth quarter and trailing by one,",
+        "Midway through the third quarter as the arena pace surged,",
+        "Down two points with twenty-four seconds remaining on the clock,",
+        "Opening possession of overtime in front of a roaring home crowd,",
+    ]
+    actions = [
+        "the point guard brought the ball across half-court against tight full-court pressure and attacked a high ball screen.",
+        "the shooting guard jumped the passing lane for a clean steal at the top of the key and sprinted down the floor.",
+        "the floor general snaked around a sturdy pick-and-roll in the lane and drew two defenders toward the paint.",
+        "the All-Star forward came off a staggered double screen on the wing and squared his shoulders behind the arc.",
+        "the point guard drove past his defender on the right elbow and whipped a crisp skip pass to the open corner shooter.",
+    ]
+    shots = [
+        "Two quick crossovers created half a step of separation before he drained a step-back three-pointer at the buzzer.",
+        "He lobbed a soft pass off the glass for the trailing forward, who slammed home a thunderous two-handed dunk.",
+        "He rose cleanly over the outstretched contest and splashed a catch-and-shoot triple nothing but net.",
+        "He knocked down a silky fadeaway jumper from the elbow and drew the foul for a decisive three-point play.",
+        "He spun smoothly in the lane and finished a high-arcing floater over the seven-foot center at the rim.",
+    ]
+    extras = [
+        "The home squad dominated the glass with fourteen offensive rebounds, turning second-chance looks into crucial points in the paint.",
+        "A chasedown block at the rim moments earlier swung momentum back and set up the unforgettable game-winner.",
+        "Timeout called by the visiting coach after a 12-0 run flipped a seven-point deficit into a five-point lead.",
+        "Down the stretch, intentional fouls sent the veteran guard to the free-throw line, where he sank four straight clutch free throws.",
+        "Aggressive defensive rotations and sharp weak-side help protected the rim through every late possession.",
+    ]
+
+    articles: list[str] = []
+    seen: set[str] = set()
+    while len(articles) < 34:
+        article = (
+            f"{rng.choice(titles)}: LATE-GAME EXECUTION\n"
+            f"{rng.choice(openers)} {rng.choice(actions)} {rng.choice(shots)}\n"
+            f"{rng.choice(extras)}"
+        )
+        if article not in seen:
+            seen.add(article)
+            articles.append(article)
+    return articles
+
+
+def _generate_cricket_articles(rng: random.Random) -> list[str]:
+    titles = [
+        "TEST CRICKET PLAY-BY-PLAY",
+        "ODI CHASE COMMENTARY",
+        "T20 DEATH-OVER REPORT",
+        "STADIUM MATCH SUMMARY",
+    ]
+    openers = [
+        "Six runs needed off the final over with only one wicket standing, and the fast bowler",
+        "Twelve runs required from the last six deliveries under bright floodlights, and the pacer",
+        "Opening spell on a lively surface with cloud cover overhead, and the bowler",
+        "In the fifteenth over of a tense run chase under lights, the leg-spinner",
+        "Deep into the death overs with a packed off-side ring, the express bowler",
+    ]
+    deliveries = [
+        "steamed in from the pavilion end with a reversing old ball and fired a searing yorker at ninety miles an hour.",
+        "hit a nagging fourth-stump channel and shaped a late outswinger past the outside edge of the bat.",
+        "disguised a sharp googly in flight to beat the left-hander on the inside edge and hit middle stump.",
+        "executed wide yorkers outside the tramline, conceding only singles while building pressure on the crease.",
+        "dug in a sharp bouncer before following up with a slower off-cutter into the pitch.",
+    ]
+    batting = [
+        "The set batter backed away to the leg side and carved a fierce square cut past backward point to the boundary rope for four.",
+        "The captain rotated the strike with nimble singles and quick twos before launching a towering pull shot over deep midwicket for six.",
+        "The opener cleared his front leg and struck an effortless cover drive cleanly through the infield gap.",
+        "The finisher stayed calm at the crease, piercing gaps behind point with late cuts and lofting an inside-out drive over extra cover.",
+        "A delicate scoop over fine leg brought up a match-winning fifty off thirty-two deliveries.",
+    ]
+    closings = [
+        "A brilliant diving catch on the boundary rope turned the tide in a nail-biting finish.",
+        "Sprinting back for the second run off the last ball, the batters beat the throw from the deep by inches.",
+        "The fielding side defended a modest total by five runs after two crucial wickets in the penultimate over.",
+        "Clinical death bowling and fearless strokeplay produced an unforgettable contest under lights.",
+        "The crowd rose in unison as the winning boundary raced across the outfield turf.",
+    ]
+
+    articles: list[str] = []
+    seen: set[str] = set()
+    while len(articles) < 34:
+        article = (
+            f"{rng.choice(titles)}: FINAL-OVER DRAMA\n"
+            f"{rng.choice(openers)} {rng.choice(deliveries)} {rng.choice(batting)}\n"
+            f"{rng.choice(closings)}"
+        )
+        if article not in seen:
+            seen.add(article)
+            articles.append(article)
+    return articles
+
+
+def _generate_baseball_articles(rng: random.Random) -> list[str]:
+    titles = [
+        "WORLD SERIES PLAY-BY-PLAY",
+        "BALLPARK NIGHT REPORT",
+        "PENNANT RACE COMMENTARY",
+        "INNING-BY-INNING RECAP",
+    ]
+    openers = [
+        "Bottom of the ninth inning, two outs, runners on first and second, and a full count on the cleanup hitter.",
+        "Top of the eighth inning with the bases loaded and one out, and the reliever enters needing a ground ball.",
+        "Leading off the sixth inning in a scoreless pitching duel,",
+        "With two outs in the bottom of the eighth and the tying run on second base,",
+        "Late in the ninth inning with the closer staring in for the sign,",
+    ]
+    pitches = [
+        "The closer shook off a slider and fired a ninety-eight-mile-per-hour four-seam fastball on the inner half.",
+        "The right-hander pounded a heavy sinker onto the inside corner, jamming the batter into a sharp grounder.",
+        "After fouling off three tough two-strike breaking balls, the hitter got a hanging changeup on the outer half.",
+        "The setup pitcher dropped a sharp downward curveball out of the strike zone to earn a crucial swinging strikeout.",
+        "The starter painted corners on the outside edge through seven innings with twelve strikeouts.",
+    ]
+    outcomes = [
+        "The slugger turned on it with thunderous bat speed, sending a towering fly ball over the right-field wall for a walk-off home run.",
+        "The shortstop ranged left, flipped cleanly to second base, and completed a sparkling 6-4-3 double play to escape the jam.",
+        "A sharp line-drive single into center field brought the runner racing around third to slide safely across home plate.",
+        "He lashed a ringing double down the left-field line as the go-ahead run scored standing up.",
+        "The speedster broke on the pitcher's first move and slid headfirst under the tag to steal second base cleanly.",
+    ]
+    closings = [
+        "The bullpen slammed the door in the ninth inning with three consecutive strikeouts.",
+        "The stadium waved towels in celebration after an unforgettable late-inning rally.",
+        "The right fielder leaped at the warning track, watching the ball sail into the roaring crowd.",
+        "Sharp defense up the middle and fearless bullpen execution secured the series victory.",
+        "Both lineups battled every pitch in a tense postseason atmosphere.",
+    ]
+
+    articles: list[str] = []
+    seen: set[str] = set()
+    while len(articles) < 34:
+        article = (
+            f"{rng.choice(titles)}: LATE-INNING RALLY\n"
+            f"{rng.choice(openers)} {rng.choice(pitches)} {rng.choice(outcomes)}\n"
+            f"{rng.choice(closings)}"
+        )
+        if article not in seen:
+            seen.add(article)
+            articles.append(article)
+    return articles
+
+
+def _generate_tennis_articles(rng: random.Random) -> list[str]:
+    titles = [
+        "GRAND SLAM PLAY-BY-PLAY",
+        "CENTER COURT REPORT",
+        "CHAMPIONSHIP MATCH COMMENTARY",
+        "TIEBREAK TENSION RECAP",
+    ]
+    openers = [
+        "Serving for the championship at five-four in the deciding fifth set,",
+        "Fourth-set tiebreak locked at six-all as both players refuse to blink on serve.",
+        "Serving at five-all in the third-set tiebreak under bright stadium lights,",
+        "At deuce deep into the fourth set after three hours on court,",
+        "Facing double break point late in the deciding set,",
+    ]
+    serves = [
+        "the top seed pounded a 132-mile-per-hour ace down the T before charging the net.",
+        "the challenger stepped inside the baseline to crush a flat backhand return deep at his opponent's shoelaces.",
+        "the defending champion landed a biting kick serve out wide to pull the returner off the court.",
+        "he mixed pace brilliantly, sliding a wide slice serve into the ad court on big points.",
+        "a kicking second serve forced a short return into the middle of the court.",
+    ]
+    rallies = [
+        "A grueling twenty-eight-shot rally unfolded across every corner until a breathtaking backhand passing shot kissed the sideline.",
+        "Following the serve straight to the net, he absorbed a low pass with a cushioned drop volley that died inches over the tape.",
+        "Absorbing heavy topspin groundstrokes behind the baseline, he disguised a delicate drop shot that bounced twice before the net.",
+        "He put away a weak half-volley with a crisp overhead smash into the open corner of the court.",
+        "A fearless inside-out forehand winner clipped the chalk to clinch the game and raise a clenched fist.",
+    ]
+    closings = [
+        "High first-serve percentages and aggressive court positioning kept pressure squarely on the returner.",
+        "On championship point, a clean crosscourt volley sealed the title after four grueling hours.",
+        "The center court crowd rose in applause for an extraordinary display of poise under pressure.",
+        "Clinical net play and relentless baseline defense decided a five-set classic.",
+        "One unreturnable ace down the center line closed out the set in emphatic style.",
+    ]
+
+    articles: list[str] = []
+    seen: set[str] = set()
+    while len(articles) < 34:
+        article = (
+            f"{rng.choice(titles)}: DECIDING-SET DRAMA\n"
+            f"{rng.choice(openers)} {rng.choice(serves)} {rng.choice(rallies)}\n"
+            f"{rng.choice(closings)}"
+        )
+        if article not in seen:
+            seen.add(article)
+            articles.append(article)
+    return articles
+
+
+def _build_sports_articles() -> list[str]:
+    rng = random.Random(42)
+    generated = (
+        _generate_football_articles(rng)
+        + _generate_basketball_articles(rng)
+        + _generate_cricket_articles(rng)
+        + _generate_baseball_articles(rng)
+        + _generate_tennis_articles(rng)
+    )
+    rng.shuffle(generated)
+
+    combined: list[str] = []
+    seen: set[str] = set()
+    for article in _BASE_ARTICLES + generated:
+        if article not in seen:
+            seen.add(article)
+            combined.append(article)
+    return combined
+
+
+SPORTS_ARTICLES: list[str] = _build_sports_articles()

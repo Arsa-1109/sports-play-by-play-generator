@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+warnings.filterwarnings("ignore", message="Failed to initialize NumPy.*", category=UserWarning)
 
 import torch
 import torch.nn as nn
@@ -133,7 +136,7 @@ class BPETokenizer:
     def vocab_size(self) -> int:
         return len(self.vocab)
 
-    def train(self, text: str, vocab_size: int = 512) -> "BPETokenizer":
+    def train(self, text: str, vocab_size: int = 900) -> "BPETokenizer":
         """Learn BPE merge rules from `text` up to `vocab_size` tokens."""
         if vocab_size < 256:
             raise ValueError(f"vocab_size must be at least 256 for byte-level BPE, got {vocab_size}")
@@ -150,15 +153,20 @@ class BPETokenizer:
             if byte_seq:
                 chunk_counts[byte_seq] += 1
 
+        # Maintain incremental pair frequencies and an inverted index so each merge
+        # updates only the chunks containing the winning pair.
+        pair_freqs: Counter[tuple[int, int]] = Counter()
+        pair_to_chunks: dict[tuple[int, int], set[tuple[int, ...]]] = {}
+        for seq, freq in chunk_counts.items():
+            if len(seq) < 2:
+                continue
+            for i in range(len(seq) - 1):
+                pair = (seq[i], seq[i + 1])
+                pair_freqs[pair] += freq
+                pair_to_chunks.setdefault(pair, set()).add(seq)
+
         num_merges = vocab_size - 256
         for step in range(num_merges):
-            pair_freqs: Counter[tuple[int, int]] = Counter()
-            for seq, freq in chunk_counts.items():
-                if len(seq) < 2:
-                    continue
-                for i in range(len(seq) - 1):
-                    pair_freqs[(seq[i], seq[i + 1])] += freq
-
             if not pair_freqs:
                 break
 
@@ -168,15 +176,29 @@ class BPETokenizer:
             self.merges[best_pair] = new_id
             self.vocab[new_id] = self.vocab[best_pair[0]] + self.vocab[best_pair[1]]
 
-            updated_counts: Counter[tuple[int, ...]] = Counter()
-            p0, p1 = best_pair
-            for seq, freq in chunk_counts.items():
-                if len(seq) >= 2 and p0 in seq and p1 in seq:
-                    merged = tuple(_merge_pair_in_sequence(list(seq), best_pair, new_id))
-                    updated_counts[merged] += freq
-                else:
-                    updated_counts[seq] += freq
-            chunk_counts = updated_counts
+            affected_seqs = list(pair_to_chunks.pop(best_pair, ()))
+            for seq in affected_seqs:
+                freq = chunk_counts.pop(seq, 0)
+                if freq <= 0:
+                    continue
+
+                for i in range(len(seq) - 1):
+                    pair = (seq[i], seq[i + 1])
+                    pair_freqs[pair] -= freq
+                    if pair_freqs[pair] <= 0:
+                        pair_freqs.pop(pair, None)
+                    chunk_set = pair_to_chunks.get(pair)
+                    if chunk_set is not None:
+                        chunk_set.discard(seq)
+                        if not chunk_set:
+                            pair_to_chunks.pop(pair, None)
+
+                merged = tuple(_merge_pair_in_sequence(list(seq), best_pair, new_id))
+                chunk_counts[merged] += freq
+                for i in range(len(merged) - 1):
+                    pair = (merged[i], merged[i + 1])
+                    pair_freqs[pair] += freq
+                    pair_to_chunks.setdefault(pair, set()).add(merged)
 
         return self
 
@@ -264,8 +286,8 @@ class TokenAndPositionalEmbedding(nn.Module):
 
 def milestone_2(
     text: str | None = None,
-    vocab_size: int = 400,
-    d_model: int = 96,
+    vocab_size: int = 900,
+    d_model: int = 128,
     block_size: int = 64,
 ) -> dict[str, Any]:
     """Milestone 2 entrypoint: train BPE tokenizer and compute token + position embeddings."""
@@ -299,13 +321,14 @@ def milestone_2(
 class GPTConfig:
     """Configuration for the decoder-only SportsGPT transformer."""
 
-    vocab_size: int = 400
+    vocab_size: int = 900
     block_size: int = 64
-    d_model: int = 96
+    d_model: int = 128
     n_heads: int = 4
     n_layers: int = 2
     dropout: float = 0.1
     bias: bool = True
+    tie_weights: bool = False
 
 
 class CausalSelfAttention(nn.Module):
@@ -395,11 +418,10 @@ class SportsGPT(nn.Module):
         )
         self.blocks = nn.ModuleList([TransformerBlock(config) for _ in range(config.n_layers)])
         self.ln_f = nn.LayerNorm(config.d_model)
-        self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=config.bias)
 
-        # Weight tying between token embedding matrix and output projection reduces parameters
-        # and accelerates convergence on compact corpora.
-        self.lm_head.weight = self.embeddings.token_emb.weight
+        if config.tie_weights:
+            self.lm_head.weight = self.embeddings.token_emb.weight
         self.apply(self._init_weights)
 
     def _init_weights(self, module: nn.Module) -> None:
@@ -431,10 +453,11 @@ class SportsGPT(nn.Module):
         self,
         idx: torch.Tensor,
         max_new_tokens: int,
-        temperature: float = 0.8,
-        top_k: int | None = 40,
-        top_p: float | None = 0.9,
+        temperature: float = 0.65,
+        top_k: int | None = 25,
+        top_p: float | None = 0.88,
         greedy: bool = False,
+        repetition_penalty: float = 1.15,
     ) -> torch.Tensor:
         """Autoregressively append up to `max_new_tokens` token IDs to `idx`."""
         was_training = self.training
@@ -450,6 +473,8 @@ class SportsGPT(nn.Module):
                     top_k=top_k,
                     top_p=top_p,
                     greedy=greedy,
+                    repetition_penalty=repetition_penalty,
+                    recent_tokens=idx[:, -32:],
                 )
                 idx = torch.cat((idx, next_token), dim=1)
         finally:
@@ -590,16 +615,16 @@ def _cosine_lr(step: int, total_steps: int, base_lr: float) -> float:
 def train_model(
     corpus_path: str | Path | None = None,
     checkpoint_path: str | Path | None = DEFAULT_CHECKPOINT_PATH,
-    vocab_size: int = 400,
+    vocab_size: int = 900,
     block_size: int = 64,
-    d_model: int = 96,
+    d_model: int = 128,
     n_heads: int = 4,
     n_layers: int = 2,
     dropout: float = 0.1,
-    steps: int = 200,
-    batch_size: int = 12,
-    lr: float = 2.5e-3,
-    eval_interval: int = 50,
+    steps: int = 400,
+    batch_size: int = 16,
+    lr: float = 3e-3,
+    eval_interval: int = 100,
     grad_clip: float = 1.0,
     seed: int = 42,
     device: str = "cpu",
@@ -706,16 +731,33 @@ def milestone_4(steps: int = 80, checkpoint_path: str | Path | None = DEFAULT_CH
 
 def sample_next_token(
     logits: torch.Tensor,
-    temperature: float = 0.8,
-    top_k: int | None = 40,
-    top_p: float | None = 0.9,
+    temperature: float = 0.65,
+    top_k: int | None = 25,
+    top_p: float | None = 0.88,
     greedy: bool = False,
+    repetition_penalty: float = 1.15,
+    recent_tokens: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Select the next token ID from `(B, vocab_size)` logits via greedy or filtered sampling."""
-    if greedy or temperature <= 0.0:
-        return torch.argmax(logits, dim=-1, keepdim=True)
+    if repetition_penalty < 1.0:
+        raise ValueError(f"repetition_penalty must be >= 1.0, got {repetition_penalty}")
 
-    scaled = logits / temperature
+    adjusted = logits
+    if repetition_penalty > 1.0 and recent_tokens is not None and recent_tokens.numel() > 0:
+        adjusted = logits.clone()
+        for row_idx in range(adjusted.size(0)):
+            seen_ids = torch.unique(recent_tokens[row_idx])
+            row_vals = adjusted[row_idx, seen_ids]
+            adjusted[row_idx, seen_ids] = torch.where(
+                row_vals < 0,
+                row_vals * repetition_penalty,
+                row_vals / repetition_penalty,
+            )
+
+    if greedy or temperature <= 0.0:
+        return torch.argmax(adjusted, dim=-1, keepdim=True)
+
+    scaled = adjusted / temperature
     vocab_size = scaled.size(-1)
 
     if top_k is not None and 0 < top_k < vocab_size:
@@ -738,15 +780,30 @@ def sample_next_token(
     return torch.multinomial(probs, num_samples=1)
 
 
+def _trim_to_sentence_end(text: str) -> str:
+    """Trim generated continuation to the last complete sentence boundary when available."""
+    if not text:
+        return text
+    min_cut = int(len(text) * 0.35)
+    for idx in range(len(text) - 1, -1, -1):
+        if text[idx] in ".!?" and (idx + 1 == len(text) or text[idx + 1].isspace()):
+            if idx >= min_cut:
+                return text[: idx + 1]
+            break
+    cleaned = re.sub(r"[-\s]+$", "", text)
+    return cleaned
+
+
 def generate_text(
     model: SportsGPT,
     tokenizer: BPETokenizer,
     prompt: str = "",
     max_new_tokens: int = 80,
-    temperature: float = 0.8,
-    top_k: int | None = 40,
-    top_p: float | None = 0.9,
+    temperature: float = 0.65,
+    top_k: int | None = 25,
+    top_p: float | None = 0.88,
     greedy: bool = False,
+    repetition_penalty: float = 1.15,
     num_snippets: int = 1,
     stop_on_article_boundary: bool = True,
     seed: int | None = None,
@@ -761,6 +818,8 @@ def generate_text(
         raise ValueError(f"top_k must be >= 0, got {top_k}")
     if top_p is not None and not (0.0 < top_p <= 1.0):
         raise ValueError(f"top_p must be in (0, 1], got {top_p}")
+    if repetition_penalty < 1.0:
+        raise ValueError(f"repetition_penalty must be >= 1.0, got {repetition_penalty}")
 
     if seed is not None:
         torch.manual_seed(seed)
@@ -781,6 +840,7 @@ def generate_text(
             top_k=top_k,
             top_p=top_p,
             greedy=greedy,
+            repetition_penalty=repetition_penalty,
         )[0].tolist()
 
         if prompt_ids:
@@ -790,13 +850,14 @@ def generate_text(
                 head = continuation.split(ARTICLE_BOUNDARY, 1)[0]
                 if head.strip():
                     continuation = head
+            continuation = _trim_to_sentence_end(continuation)
             snippet = f"{prompt}{continuation}".strip()
         else:
             decoded = tokenizer.decode(out_ids[len(seed_ids) :])
             if stop_on_article_boundary and ARTICLE_BOUNDARY in decoded:
                 parts = [p.strip() for p in decoded.split(ARTICLE_BOUNDARY) if p.strip()]
                 decoded = parts[0] if parts else decoded
-            snippet = decoded.strip()
+            snippet = _trim_to_sentence_end(decoded).strip()
 
         snippets.append(snippet)
     return snippets
@@ -804,7 +865,7 @@ def generate_text(
 
 def ensure_trained_checkpoint(
     checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
-    steps: int = 150,
+    steps: int = 300,
     verbose: bool = True,
 ) -> Path:
     """Return existing checkpoint path or fast-train a baseline model if missing."""
@@ -822,7 +883,7 @@ def evaluate_baseline(
     checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
     corpus_path: str | Path | None = None,
     val_ratio: float = 0.1,
-    steps: int = 200,
+    steps: int = 400,
     train_if_missing: bool = True,
     device: str = "cpu",
 ) -> dict[str, Any]:
@@ -996,10 +1057,11 @@ def milestone_5(
 def milestone_6(
     prompt: str = "Bottom of the ninth inning, two outs,",
     max_new_tokens: int = 70,
-    temperature: float = 0.8,
-    top_k: int | None = 40,
-    top_p: float | None = 0.9,
+    temperature: float = 0.65,
+    top_k: int | None = 25,
+    top_p: float | None = 0.88,
     greedy: bool = False,
+    repetition_penalty: float = 1.15,
     num_snippets: int = 1,
     checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
 ) -> list[str]:
@@ -1015,5 +1077,6 @@ def milestone_6(
         top_k=top_k,
         top_p=top_p,
         greedy=greedy,
+        repetition_penalty=repetition_penalty,
         num_snippets=num_snippets,
     )

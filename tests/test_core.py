@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from pathlib import Path
+
+warnings.filterwarnings("ignore", message="Failed to initialize NumPy.*", category=UserWarning)
 
 import pytest
 import torch
@@ -38,8 +41,9 @@ from app.core import (
 # Milestone 1: Gather a small corpus of sports commentary or news articles.
 def test_milestone_1(tmp_path: Path):
     info = milestone_1()
-    assert info["num_articles"] >= 30
-    assert 20_000 <= info["total_chars"] <= 60_000
+    assert info["num_articles"] >= 150
+    assert 60_000 <= info["total_chars"] <= 200_000
+    assert len(info["articles"]) == len(set(info["articles"]))
     assert ARTICLE_BOUNDARY in info["text"]
 
     # Whitespace normalization
@@ -197,10 +201,22 @@ def test_milestone_5(tmp_path: Path):
     long_out = generate_text(model, tok, prompt=long_prompt, max_new_tokens=15, greedy=True)
     assert len(long_out) == 1 and long_out[0].startswith(long_prompt)
 
-    # Multiple snippets
+    # Multiple snippets + repetition penalty + sentence boundary trimming
     multi = milestone_5(prompt="The fast bowler", max_new_tokens=20, num_snippets=3, checkpoint_path=ckpt_path)
     assert len(multi) == 3
     assert all(s.startswith("The fast bowler") for s in multi)
+
+    penalized = generate_text(
+        model,
+        tok,
+        prompt="Ninety minutes on the clock",
+        max_new_tokens=40,
+        repetition_penalty=1.2,
+        seed=42,
+    )
+    assert len(penalized) == 1 and not penalized[0].endswith("-")
+    with pytest.raises(ValueError, match="repetition_penalty"):
+        generate_text(model, tok, prompt="Goal", repetition_penalty=0.5)
 
 
 # Milestone 6: Create a CLI where users can input a prompt and receive generated commentary.
@@ -235,7 +251,15 @@ def test_milestone_6(tmp_path: Path, capsys, monkeypatch):
     assert "[Snippet 1] With four seconds remaining" in gen_out
     assert "[Snippet 2] With four seconds remaining" in gen_out
 
-    # 3. Auto-train fallback when generate is run against a missing checkpoint
+    # 3. Auto-train fallback when generate is run against a missing checkpoint (fast test budget)
+    import app.core as core_mod
+
+    orig_ensure = core_mod.ensure_trained_checkpoint
+    monkeypatch.setattr(
+        core_mod,
+        "ensure_trained_checkpoint",
+        lambda path, steps=25, verbose=True: orig_ensure(path, steps=25, verbose=verbose),
+    )
     auto_ckpt = tmp_path / "auto_ckpt.pt"
     main([
         "generate",
@@ -247,6 +271,7 @@ def test_milestone_6(tmp_path: Path, capsys, monkeypatch):
     auto_out = capsys.readouterr().out
     assert auto_ckpt.exists()
     assert "[Snippet 1] Bottom of the ninth" in auto_out
+    monkeypatch.setattr(core_mod, "ensure_trained_checkpoint", orig_ensure)
 
     # 4. Interactive REPL command (tip, placeholder stripping, standalone + inline commands)
     inputs = iter([

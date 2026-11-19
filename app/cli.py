@@ -20,9 +20,10 @@ def _strip_placeholders(text: str) -> str:
 
 def _add_generation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-tokens", type=int, default=80, help="maximum tokens to generate per snippet (>= 1)")
-    parser.add_argument("--temperature", type=float, default=0.8, help="sampling temperature (<=0 uses greedy)")
-    parser.add_argument("--top-k", type=int, default=40, help="top-k sampling cutoff (0 disables)")
-    parser.add_argument("--top-p", type=float, default=0.9, help="nucleus (top-p) sampling threshold in (0, 1]")
+    parser.add_argument("--temperature", type=float, default=0.65, help="sampling temperature (<=0 uses greedy)")
+    parser.add_argument("--top-k", type=int, default=25, help="top-k sampling cutoff (0 disables)")
+    parser.add_argument("--top-p", type=float, default=0.88, help="nucleus (top-p) sampling threshold in (0, 1]")
+    parser.add_argument("--repetition-penalty", type=float, default=1.15, help="penalty for recent tokens (>= 1.0)")
     parser.add_argument("--greedy", action="store_true", help="use deterministic greedy decoding")
     parser.add_argument("--num-snippets", type=int, default=1, help="number of commentary snippets to generate (>= 1)")
     parser.add_argument(
@@ -42,6 +43,8 @@ def _validate_gen_args(parser: argparse.ArgumentParser, args: argparse.Namespace
         parser.error("--top-k must be >= 0")
     if not (0.0 < args.top_p <= 1.0):
         parser.error("--top-p must be in (0, 1]")
+    if args.repetition_penalty < 1.0:
+        parser.error("--repetition-penalty must be >= 1.0")
 
 
 def _format_eval_report(report: dict) -> str:
@@ -75,6 +78,7 @@ def _run_interactive_session(
         "temperature": args.temperature,
         "top_k": args.top_k if args.top_k > 0 else None,
         "top_p": args.top_p,
+        "repetition_penalty": args.repetition_penalty,
         "greedy": args.greedy,
         "num_snippets": args.num_snippets,
         "seed": args.seed,
@@ -186,6 +190,7 @@ def _run_interactive_session(
             top_k=state["top_k"],
             top_p=state["top_p"],
             greedy=state["greedy"],
+            repetition_penalty=state["repetition_penalty"],
             num_snippets=state["num_snippets"],
             seed=state["seed"],
         )
@@ -205,14 +210,14 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("hello", help="check that everything is wired up")
 
     train_p = sub.add_parser("train", help="train BPE tokenizer and SportsGPT from scratch")
-    train_p.add_argument("--steps", type=int, default=200, help="number of AdamW training steps (>= 1)")
-    train_p.add_argument("--vocab-size", type=int, default=400, help="BPE vocabulary size (>= 256)")
-    train_p.add_argument("--d-model", type=int, default=96, help="transformer embedding dimension")
+    train_p.add_argument("--steps", type=int, default=400, help="number of AdamW training steps (>= 1)")
+    train_p.add_argument("--vocab-size", type=int, default=900, help="BPE vocabulary size (>= 256)")
+    train_p.add_argument("--d-model", type=int, default=128, help="transformer embedding dimension")
     train_p.add_argument("--n-heads", type=int, default=4, help="number of causal attention heads")
     train_p.add_argument("--n-layers", type=int, default=2, help="number of transformer blocks")
     train_p.add_argument("--block-size", type=int, default=64, help="maximum context window length (>= 2)")
-    train_p.add_argument("--batch-size", type=int, default=12, help="training batch size (>= 1)")
-    train_p.add_argument("--lr", type=float, default=2.5e-3, help="peak learning rate (> 0)")
+    train_p.add_argument("--batch-size", type=int, default=16, help="training batch size (>= 1)")
+    train_p.add_argument("--lr", type=float, default=3e-3, help="peak learning rate (> 0)")
     train_p.add_argument("--corpus", default=None, help="optional path to custom UTF-8 sports corpus")
     train_p.add_argument(
         "--checkpoint",
@@ -232,7 +237,7 @@ def main(argv: list[str] | None = None) -> None:
     eval_p = sub.add_parser("eval", help="benchmark SportsGPT against Uniform, Unigram, and Bigram baselines")
     eval_p.add_argument("--checkpoint", default="data/sports_gpt.pt", help="path to trained SportsGPT checkpoint")
     eval_p.add_argument("--corpus", default=None, help="optional path to custom UTF-8 sports corpus")
-    eval_p.add_argument("--steps", type=int, default=200, help="training steps if checkpoint does not yet exist")
+    eval_p.add_argument("--steps", type=int, default=400, help="training steps if checkpoint does not yet exist")
     eval_p.add_argument("--json", action="store_true", help="emit machine-readable JSON evaluation metrics")
 
     inter_p = sub.add_parser("interactive", help="interactive REPL for live commentary generation")
@@ -310,6 +315,7 @@ def main(argv: list[str] | None = None) -> None:
                 top_k=args.top_k if args.top_k > 0 else None,
                 top_p=args.top_p,
                 greedy=args.greedy,
+                repetition_penalty=args.repetition_penalty,
                 num_snippets=args.num_snippets,
                 seed=args.seed,
             )
