@@ -10,6 +10,7 @@ import torch
 from app.core import BPETokenizer, TokenAndPositionalEmbedding, milestone_2
 import math
 from app.core import CausalSelfAttention, GPTConfig, milestone_3
+from app.core import get_batch, load_checkpoint, milestone_4, train_model
 
 # Milestone 1: Gather a small corpus of sports commentary or news articles.
 def test_milestone_1(tmp_path: Path):
@@ -98,9 +99,44 @@ def test_milestone_3():
 
 
 # Milestone 4: Train the GPT model using the sports text data.
-@pytest.mark.skip(reason="remove this line when you start milestone 4")
-def test_milestone_4():
-    raise NotImplementedError("write the test for milestone 4")
+def test_milestone_4(tmp_path: Path):
+    # Check get_batch target alignment (next-token shift)
+    seq = torch.arange(50, dtype=torch.long)
+    xb, yb = get_batch(seq, block_size=8, batch_size=4)
+    assert xb.shape == (4, 8) and yb.shape == (4, 8)
+    assert torch.equal(xb[:, 1:], yb[:, :-1])
+
+    ckpt_path = tmp_path / "model.pt"
+    result = train_model(
+        checkpoint_path=ckpt_path,
+        vocab_size=360,
+        block_size=48,
+        d_model=64,
+        n_heads=4,
+        n_layers=2,
+        steps=50,
+        batch_size=12,
+        lr=1.5e-3,
+        eval_interval=50,
+        seed=42,
+        verbose=False,
+    )
+    assert ckpt_path.exists()
+    assert result["final_train_loss"] < result["initial_loss"]
+
+    # Checkpoint load roundtrip
+    model, tok, cfg, meta = load_checkpoint(ckpt_path)
+    assert cfg.vocab_size == tok.vocab_size
+    assert meta["steps"] == 50
+    probe = torch.tensor([[10, 20, 30]], dtype=torch.long)
+    result["model"].eval()
+    with torch.no_grad():
+        logits_orig, _ = result["model"](probe)
+        logits_loaded, _ = model(probe)
+    assert torch.allclose(logits_orig, logits_loaded, atol=1e-6)
+
+    m4 = milestone_4(steps=30, checkpoint_path=tmp_path / "m4.pt")
+    assert m4["final_train_loss"] < m4["initial_loss"]
 
 
 # Milestone 5: Develop a text generation function to produce short commentary snippets.

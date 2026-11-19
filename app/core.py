@@ -475,10 +475,229 @@ def milestone_3(config: GPTConfig | None = None) -> dict[str, Any]:
     }
 
 
-# --- Milestone 4: Train the GPT model using the sports text data.
-# Hint: Training Loop; Loss Calculation
-def milestone_4():  # TODO(milestone 4)
-    raise NotImplementedError("TODO(milestone 4)")
+# ---------------------------------------------------------------------------
+# Milestone 4: Training Loop, Loss Calculation & Checkpointing
+# ---------------------------------------------------------------------------
+
+def get_batch(
+    data: torch.Tensor,
+    block_size: int,
+    batch_size: int,
+    device: torch.device | str = "cpu",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample a random batch of (input, next-token target) windows from 1D token tensor."""
+    if data.numel() < 2:
+        raise ValueError("Data tensor must have at least 2 tokens.")
+    eff_block = min(block_size, data.numel() - 1)
+    max_start = data.numel() - eff_block
+    starts = torch.randint(0, max_start, (batch_size,))
+    x = torch.stack([data[i : i + eff_block] for i in starts])
+    y = torch.stack([data[i + 1 : i + 1 + eff_block] for i in starts])
+    return x.to(device), y.to(device)
+
+
+@torch.no_grad()
+def estimate_loss(
+    model: SportsGPT,
+    train_data: torch.Tensor,
+    val_data: torch.Tensor,
+    block_size: int,
+    batch_size: int,
+    eval_iters: int = 8,
+    device: torch.device | str = "cpu",
+) -> dict[str, float]:
+    """Estimate average train and validation cross-entropy loss without gradients."""
+    was_training = model.training
+    model.eval()
+    losses: dict[str, float] = {}
+    try:
+        for split_name, split_data in (("train", train_data), ("val", val_data)):
+            batch_losses = []
+            for _ in range(eval_iters):
+                xb, yb = get_batch(split_data, block_size, batch_size, device=device)
+                _, loss = model(xb, yb)
+                assert loss is not None
+                batch_losses.append(float(loss.item()))
+            losses[split_name] = sum(batch_losses) / len(batch_losses)
+    finally:
+        if was_training:
+            model.train()
+    return losses
+
+
+def save_checkpoint(
+    path: str | Path,
+    model: SportsGPT,
+    tokenizer: BPETokenizer,
+    config: GPTConfig,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    """Persist model weights, GPTConfig, and BPE tokenizer state to disk."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "model_state_dict": model.state_dict(),
+        "config": asdict(config),
+        "tokenizer": tokenizer.to_dict(),
+        "metadata": metadata or {},
+    }
+    torch.save(payload, out_path)
+    return out_path
+
+
+def load_checkpoint(
+    path: str | Path,
+    device: torch.device | str = "cpu",
+) -> tuple[SportsGPT, BPETokenizer, GPTConfig, dict[str, Any]]:
+    """Restore SportsGPT, BPETokenizer, GPTConfig, and metadata from checkpoint."""
+    ckpt_path = Path(path)
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    payload = torch.load(ckpt_path, map_location=device, weights_only=False)
+    config = GPTConfig(**payload["config"])
+    tokenizer = BPETokenizer.from_dict(payload["tokenizer"])
+    model = SportsGPT(config).to(device)
+    model.load_state_dict(payload["model_state_dict"])
+    model.eval()
+    return model, tokenizer, config, payload.get("metadata", {})
+
+
+@contextmanager
+def _cpu_single_thread(device: str):
+    """Avoid OpenMP thread-sync overhead on small CPU transformer matrices."""
+    if str(device).startswith("cpu"):
+        prev = torch.get_num_threads()
+        torch.set_num_threads(1)
+        try:
+            yield
+        finally:
+            torch.set_num_threads(prev)
+    else:
+        yield
+
+
+def _cosine_lr(step: int, total_steps: int, base_lr: float) -> float:
+    """Linear warmup over first 10% of steps followed by cosine decay to 10% of base_lr."""
+    warmup_steps = max(1, total_steps // 10)
+    if step <= warmup_steps:
+        return base_lr * (step / warmup_steps)
+    progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+    return base_lr * (0.1 + 0.9 * cosine)
+
+
+def train_model(
+    corpus_path: str | Path | None = None,
+    checkpoint_path: str | Path | None = DEFAULT_CHECKPOINT_PATH,
+    vocab_size: int = 400,
+    block_size: int = 64,
+    d_model: int = 96,
+    n_heads: int = 4,
+    n_layers: int = 2,
+    dropout: float = 0.1,
+    steps: int = 200,
+    batch_size: int = 12,
+    lr: float = 2.5e-3,
+    eval_interval: int = 50,
+    grad_clip: float = 1.0,
+    seed: int = 42,
+    device: str = "cpu",
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """End-to-end training pipeline: corpus -> BPE -> SportsGPT -> checkpoint."""
+    if steps < 1:
+        raise ValueError(f"steps must be >= 1, got {steps}")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    if block_size < 2:
+        raise ValueError(f"block_size must be >= 2, got {block_size}")
+    if lr <= 0:
+        raise ValueError(f"lr must be > 0, got {lr}")
+
+    torch.manual_seed(seed)
+
+    articles = load_corpus(corpus_path)
+    corpus_text = prepare_corpus_text(articles)
+    tokenizer = BPETokenizer().train(corpus_text, vocab_size=vocab_size)
+    token_ids = tokenizer.encode(corpus_text)
+    train_data, val_data = train_val_split(token_ids, val_ratio=0.1)
+
+    config = GPTConfig(
+        vocab_size=tokenizer.vocab_size,
+        block_size=block_size,
+        d_model=d_model,
+        n_heads=n_heads,
+        n_layers=n_layers,
+        dropout=dropout,
+    )
+    model = SportsGPT(config).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+
+    with _cpu_single_thread(device):
+        initial_losses = estimate_loss(model, train_data, val_data, block_size, batch_size, eval_iters=3, device=device)
+        initial_loss = initial_losses["train"]
+        history: list[dict[str, float | int]] = [
+            {"step": 0, "train_loss": initial_losses["train"], "val_loss": initial_losses["val"]}
+        ]
+        if verbose:
+            print(
+                f"step    0 | train_loss={initial_losses['train']:.4f} | val_loss={initial_losses['val']:.4f}"
+            )
+
+        model.train()
+        for step in range(1, steps + 1):
+            step_lr = _cosine_lr(step, steps, lr)
+            for group in optimizer.param_groups:
+                group["lr"] = step_lr
+
+            xb, yb = get_batch(train_data, block_size, batch_size, device=device)
+            _, loss = model(xb, yb)
+            assert loss is not None
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+
+            if step % eval_interval == 0 or step == steps:
+                losses = estimate_loss(model, train_data, val_data, block_size, batch_size, eval_iters=3, device=device)
+                history.append({"step": step, "train_loss": losses["train"], "val_loss": losses["val"]})
+                if verbose:
+                    print(
+                        f"step {step:4d} | train_loss={losses['train']:.4f} | val_loss={losses['val']:.4f}"
+                    )
+
+    final_train_loss = float(history[-1]["train_loss"])
+    final_val_loss = float(history[-1]["val_loss"])
+    metadata = {
+        "steps": steps,
+        "initial_loss": initial_loss,
+        "final_train_loss": final_train_loss,
+        "final_val_loss": final_val_loss,
+        "num_tokens": len(token_ids),
+        "num_articles": len(articles),
+    }
+
+    saved_path: str | None = None
+    if checkpoint_path is not None:
+        saved_path = str(save_checkpoint(checkpoint_path, model, tokenizer, config, metadata=metadata))
+
+    return {
+        "model": model,
+        "tokenizer": tokenizer,
+        "config": config,
+        "initial_loss": initial_loss,
+        "final_train_loss": final_train_loss,
+        "final_val_loss": final_val_loss,
+        "history": history,
+        "checkpoint_path": saved_path,
+        "num_tokens": len(token_ids),
+    }
+
+
+def milestone_4(steps: int = 80, checkpoint_path: str | Path | None = DEFAULT_CHECKPOINT_PATH) -> dict[str, Any]:
+    """Milestone 4 entrypoint: train SportsGPT on the sports corpus and track loss."""
+    return train_model(steps=steps, checkpoint_path=checkpoint_path, verbose=False)
 
 
 # --- Milestone 5: Develop a text generation function to produce short commentary snippets.
