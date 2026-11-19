@@ -1,17 +1,39 @@
-"""Your tests. Each milestone in README.md gets one here: write the test first, then make it pass.
+"""Unit and integration tests for Milestones 1 through 6."""
+from __future__ import annotations
 
-They start skipped. Remove the `skip` line as you work on each milestone.
-"""
-import pytest
-
-from pathlib import Path
-from app.core import ARTICLE_BOUNDARY, load_corpus, milestone_1, normalize_text, prepare_corpus_text, train_val_split
-import torch
-from app.core import BPETokenizer, TokenAndPositionalEmbedding, milestone_2
+import json
 import math
-from app.core import CausalSelfAttention, GPTConfig, milestone_3
-from app.core import get_batch, load_checkpoint, milestone_4, train_model
-from app.core import generate_text, milestone_5
+from pathlib import Path
+
+import pytest
+import torch
+
+from app.cli import main
+from app.core import (
+    ARTICLE_BOUNDARY,
+    BPETokenizer,
+    CausalSelfAttention,
+    GPTConfig,
+    SportsGPT,
+    TokenAndPositionalEmbedding,
+    evaluate_baseline,
+    generate_text,
+    get_batch,
+    load_checkpoint,
+    load_corpus,
+    milestone_1,
+    milestone_2,
+    milestone_3,
+    milestone_4,
+    milestone_5,
+    milestone_6,
+    normalize_text,
+    prepare_corpus_text,
+    save_checkpoint,
+    train_model,
+    train_val_split,
+)
+
 
 # Milestone 1: Gather a small corpus of sports commentary or news articles.
 def test_milestone_1(tmp_path: Path):
@@ -182,7 +204,89 @@ def test_milestone_5(tmp_path: Path):
 
 
 # Milestone 6: Create a CLI where users can input a prompt and receive generated commentary.
-@pytest.mark.skip(reason="remove this line when you start milestone 6")
-def test_milestone_6():
-    raise NotImplementedError("write the test for milestone 6")
+def test_milestone_6(tmp_path: Path, capsys, monkeypatch):
+    ckpt_path = tmp_path / "cli_ckpt.pt"
 
+    # 1. Explicit train command
+    main([
+        "train",
+        "--steps", "40",
+        "--vocab-size", "320",
+        "--d-model", "64",
+        "--n-heads", "4",
+        "--n-layers", "2",
+        "--block-size", "48",
+        "--checkpoint", str(ckpt_path),
+    ])
+    train_out = capsys.readouterr().out
+    assert "Training complete" in train_out
+    assert ckpt_path.exists()
+
+    # 2. Generate command with multiple snippets
+    main([
+        "generate",
+        "--prompt", "With four seconds remaining",
+        "--max-tokens", "24",
+        "--num-snippets", "2",
+        "--checkpoint", str(ckpt_path),
+        "--seed", "99",
+    ])
+    gen_out = capsys.readouterr().out
+    assert "[Snippet 1] With four seconds remaining" in gen_out
+    assert "[Snippet 2] With four seconds remaining" in gen_out
+
+    # 3. Auto-train fallback when generate is run against a missing checkpoint
+    auto_ckpt = tmp_path / "auto_ckpt.pt"
+    main([
+        "generate",
+        "--prompt", "Bottom of the ninth",
+        "--max-tokens", "16",
+        "--greedy",
+        "--checkpoint", str(auto_ckpt),
+    ])
+    auto_out = capsys.readouterr().out
+    assert auto_ckpt.exists()
+    assert "[Snippet 1] Bottom of the ninth" in auto_out
+
+    # 4. Interactive REPL command (tip, placeholder stripping, standalone + inline commands)
+    inputs = iter([
+        "/temp 0.6",
+        "/greedy <The point guard crossed half-court>",
+        "quit",
+    ])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
+    main([
+        "interactive",
+        "--checkpoint", str(ckpt_path),
+        "--max-tokens", "15",
+    ])
+    inter_out = capsys.readouterr().out
+    assert "Tip:" in inter_out
+    assert "Temperature set to 0.6." in inter_out
+    assert "[Snippet 1] The point guard crossed half-court" in inter_out
+
+    # 5. Baseline evaluation CLI & programmatic check
+    report = evaluate_baseline(checkpoint_path=ckpt_path, train_if_missing=False)
+    assert report["val_eval_tokens"] > 100
+    assert report["beats_unigram"] is True
+    main(["eval", "--checkpoint", str(ckpt_path), "--json"])
+    eval_json = json.loads(capsys.readouterr().out)
+    assert [m["name"] for m in eval_json["models"]] == [
+        "Uniform Random",
+        "Unigram (Laplace)",
+        "Bigram (Laplace)",
+        "SportsGPT (Ours)",
+    ]
+
+    # 6. Clean error handling on invalid flags / missing corpus (exit code 2, no raw traceback)
+    with pytest.raises(SystemExit) as exc_info:
+        main(["generate", "--max-tokens", "0"])
+    assert exc_info.value.code == 2
+
+    with pytest.raises(SystemExit) as missing_exc:
+        main(["train", "--corpus", str(tmp_path / "does_not_exist.txt"), "--steps", "5"])
+    assert missing_exc.value.code == 2
+
+    # 7. Programmatic milestone_6 helper
+    res = milestone_6(prompt="Serving for the championship", max_new_tokens=15, checkpoint_path=ckpt_path)
+    assert len(res) == 1 and res[0].startswith("Serving for the championship")

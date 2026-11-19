@@ -817,7 +817,203 @@ def ensure_trained_checkpoint(
     return path
 
 
-# --- Milestone 6: Create a CLI where users can input a prompt and receive generated commentary.
-# Hint: User Input Handling
-def milestone_6():  # TODO(milestone 6)
-    raise NotImplementedError("TODO(milestone 6)")
+@torch.no_grad()
+def evaluate_baseline(
+    checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
+    corpus_path: str | Path | None = None,
+    val_ratio: float = 0.1,
+    steps: int = 200,
+    train_if_missing: bool = True,
+    device: str = "cpu",
+) -> dict[str, Any]:
+    """Benchmark SportsGPT against Uniform, Unigram, and Bigram baselines on held-out tokens."""
+    ckpt = Path(checkpoint_path)
+    if not ckpt.exists():
+        if not train_if_missing:
+            raise FileNotFoundError(f"Checkpoint not found: {ckpt}")
+        train_model(corpus_path=corpus_path, checkpoint_path=ckpt, steps=steps, verbose=False, device=device)
+
+    model, tokenizer, config, metadata = load_checkpoint(ckpt, device=device)
+    articles = load_corpus(corpus_path)
+    corpus_text = prepare_corpus_text(articles)
+    token_ids = tokenizer.encode(corpus_text)
+    train_data, val_data = train_val_split(token_ids, val_ratio=val_ratio)
+
+    train_list = train_data.tolist()
+    val_list = val_data.tolist()
+    n_eval = len(val_list) - 1
+    if n_eval < 1:
+        raise ValueError("Validation split must contain at least 2 tokens for evaluation.")
+
+    vocab_size = tokenizer.vocab_size
+
+    # 1. Uniform random baseline
+    uniform_ce = math.log(vocab_size)
+    uniform_ppl = float(vocab_size)
+    uniform_top1 = 1.0 / vocab_size
+    uniform_top5 = min(5, vocab_size) / vocab_size
+
+    # 2. Laplace-smoothed Unigram frequency baseline (fit strictly on train_data)
+    uni_counts = Counter(train_list)
+    uni_denom = len(train_list) + vocab_size
+    uni_top5_tokens = [tok for tok, _ in uni_counts.most_common(5)]
+    uni_top1_tok = uni_top5_tokens[0]
+    uni_top5_set = set(uni_top5_tokens)
+
+    uni_nll = 0.0
+    uni_t1 = 0
+    uni_t5 = 0
+    for target in val_list[1:]:
+        p = (uni_counts[target] + 1.0) / uni_denom
+        uni_nll -= math.log(p)
+        if target == uni_top1_tok:
+            uni_t1 += 1
+        if target in uni_top5_set:
+            uni_t5 += 1
+    unigram_ce = uni_nll / n_eval
+    unigram_ppl = math.exp(unigram_ce)
+
+    # 3. Laplace-smoothed Bigram Markov baseline (fit strictly on train_data)
+    alpha = 0.5
+    ctx_counts = Counter(train_list[:-1])
+    bi_counts: dict[int, Counter[int]] = {}
+    for a, b in zip(train_list[:-1], train_list[1:]):
+        bi_counts.setdefault(a, Counter())[b] += 1
+
+    bi_nll = 0.0
+    bi_t1 = 0
+    bi_t5 = 0
+    top5_cache: dict[int, list[int]] = {}
+    for prev_tok, target in zip(val_list[:-1], val_list[1:]):
+        next_counter = bi_counts.get(prev_tok)
+        denom = ctx_counts[prev_tok] + alpha * vocab_size
+        c = next_counter[target] if next_counter is not None else 0
+        bi_nll -= math.log((c + alpha) / denom)
+        if prev_tok not in top5_cache:
+            if next_counter:
+                top5_cache[prev_tok] = [tok for tok, _ in next_counter.most_common(5)]
+            else:
+                top5_cache[prev_tok] = uni_top5_tokens
+        ranked = top5_cache[prev_tok]
+        if target == ranked[0]:
+            bi_t1 += 1
+        if target in ranked:
+            bi_t5 += 1
+    bigram_ce = bi_nll / n_eval
+    bigram_ppl = math.exp(bigram_ce)
+
+    # 4. SportsGPT deterministic evaluation across every token in val_data[1:]
+    model.eval()
+    gpt_nll = 0.0
+    gpt_t1 = 0
+    gpt_t5 = 0
+    with _cpu_single_thread(device):
+        pos = 1
+        while pos < len(val_list):
+            end = min(len(val_list), pos + config.block_size)
+            chunk = val_data[pos - 1 : end].to(device)
+            inputs = chunk[:-1].unsqueeze(0)
+            targets = chunk[1:]
+            logits, _ = model(inputs)
+            step_logits = logits[0]
+            log_probs = F.log_softmax(step_logits, dim=-1)
+            gpt_nll -= float(log_probs[torch.arange(targets.size(0), device=device), targets].sum().item())
+            top5_preds = torch.topk(step_logits, k=min(5, vocab_size), dim=-1).indices
+            gpt_t1 += int((top5_preds[:, 0] == targets).sum().item())
+            gpt_t5 += int((top5_preds == targets.unsqueeze(1)).any(dim=1).sum().item())
+            pos = end
+
+    gpt_ce = gpt_nll / n_eval
+    gpt_ppl = math.exp(gpt_ce)
+
+    models_summary = [
+        {
+            "name": "Uniform Random",
+            "cross_entropy": round(uniform_ce, 4),
+            "perplexity": round(uniform_ppl, 2),
+            "top1_acc": round(uniform_top1, 4),
+            "top5_acc": round(uniform_top5, 4),
+        },
+        {
+            "name": "Unigram (Laplace)",
+            "cross_entropy": round(unigram_ce, 4),
+            "perplexity": round(unigram_ppl, 2),
+            "top1_acc": round(uni_t1 / n_eval, 4),
+            "top5_acc": round(uni_t5 / n_eval, 4),
+        },
+        {
+            "name": "Bigram (Laplace)",
+            "cross_entropy": round(bigram_ce, 4),
+            "perplexity": round(bigram_ppl, 2),
+            "top1_acc": round(bi_t1 / n_eval, 4),
+            "top5_acc": round(bi_t5 / n_eval, 4),
+        },
+        {
+            "name": "SportsGPT (Ours)",
+            "cross_entropy": round(gpt_ce, 4),
+            "perplexity": round(gpt_ppl, 2),
+            "top1_acc": round(gpt_t1 / n_eval, 4),
+            "top5_acc": round(gpt_t5 / n_eval, 4),
+        },
+    ]
+
+    return {
+        "checkpoint_path": str(ckpt),
+        "vocab_size": vocab_size,
+        "train_tokens": len(train_list),
+        "val_eval_tokens": n_eval,
+        "trained_steps": metadata.get("steps"),
+        "models": models_summary,
+        "ppl_reduction_vs_unigram_pct": round((unigram_ppl - gpt_ppl) / unigram_ppl * 100.0, 2),
+        "ppl_reduction_vs_bigram_pct": round((bigram_ppl - gpt_ppl) / bigram_ppl * 100.0, 2),
+        "beats_unigram": gpt_ce < unigram_ce,
+        "beats_bigram": gpt_ce < bigram_ce,
+    }
+
+
+def milestone_5(
+    prompt: str = "Ninety minutes on the clock, and the striker",
+    max_new_tokens: int = 60,
+    num_snippets: int = 2,
+    checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
+) -> list[str]:
+    """Milestone 5 entrypoint: generate sports commentary snippets from a prompt."""
+    ckpt = ensure_trained_checkpoint(checkpoint_path, verbose=False)
+    model, tokenizer, _, _ = load_checkpoint(ckpt)
+    return generate_text(
+        model=model,
+        tokenizer=tokenizer,
+        prompt=prompt,
+        max_new_tokens=max_new_tokens,
+        num_snippets=num_snippets,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Milestone 6: CLI Interactive & Programmatic Entrypoint
+# ---------------------------------------------------------------------------
+
+def milestone_6(
+    prompt: str = "Bottom of the ninth inning, two outs,",
+    max_new_tokens: int = 70,
+    temperature: float = 0.8,
+    top_k: int | None = 40,
+    top_p: float | None = 0.9,
+    greedy: bool = False,
+    num_snippets: int = 1,
+    checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
+) -> list[str]:
+    """Milestone 6 entrypoint: generate commentary ready for CLI display."""
+    ckpt = ensure_trained_checkpoint(checkpoint_path, verbose=False)
+    model, tokenizer, _, _ = load_checkpoint(ckpt)
+    return generate_text(
+        model=model,
+        tokenizer=tokenizer,
+        prompt=prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        greedy=greedy,
+        num_snippets=num_snippets,
+    )
