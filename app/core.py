@@ -291,10 +291,188 @@ def milestone_2(
     }
 
 
-# --- Milestone 3: Build the causal self-attention mechanism and assemble the transformer block.
-# Hint: Causal Self-Attention; Transformer Block
-def milestone_3():  # TODO(milestone 3)
-    raise NotImplementedError("TODO(milestone 3)")
+# ---------------------------------------------------------------------------
+# Milestone 3: Causal Self-Attention, Transformer Block & SportsGPT Model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GPTConfig:
+    """Configuration for the decoder-only SportsGPT transformer."""
+
+    vocab_size: int = 400
+    block_size: int = 64
+    d_model: int = 96
+    n_heads: int = 4
+    n_layers: int = 2
+    dropout: float = 0.1
+    bias: bool = True
+
+
+class CausalSelfAttention(nn.Module):
+    """Multi-head masked self-attention with explicit lower-triangular causal mask."""
+
+    def __init__(self, config: GPTConfig) -> None:
+        super().__init__()
+        if config.d_model % config.n_heads != 0:
+            raise ValueError(
+                f"d_model ({config.d_model}) must be divisible by n_heads ({config.n_heads})"
+            )
+        self.n_heads = config.n_heads
+        self.head_dim = config.d_model // config.n_heads
+        self.d_model = config.d_model
+
+        self.q_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
+        self.k_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
+        self.v_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
+        self.out_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
+
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+
+        mask = torch.tril(torch.ones(config.block_size, config.block_size, dtype=torch.bool))
+        self.register_buffer("causal_mask", mask.view(1, 1, config.block_size, config.block_size))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, channels = x.shape
+
+        q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+
+        scale = 1.0 / math.sqrt(self.head_dim)
+        scores = (q @ k.transpose(-2, -1)) * scale
+        scores = scores.masked_fill(~self.causal_mask[:, :, :seq_len, :seq_len], float("-inf"))
+
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.attn_dropout(attn_weights)
+
+        out = attn_weights @ v
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, channels)
+        return self.resid_dropout(self.out_proj(out))
+
+
+class FeedForward(nn.Module):
+    """Position-wise two-layer MLP with GELU nonlinearity."""
+
+    def __init__(self, config: GPTConfig) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(config.d_model, 4 * config.d_model, bias=config.bias)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(4 * config.d_model, config.d_model, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.dropout(self.fc2(self.act(self.fc1(x))))
+
+
+class TransformerBlock(nn.Module):
+    """Pre-LayerNorm decoder block with residual connections."""
+
+    def __init__(self, config: GPTConfig) -> None:
+        super().__init__()
+        self.ln1 = nn.LayerNorm(config.d_model)
+        self.attn = CausalSelfAttention(config)
+        self.ln2 = nn.LayerNorm(config.d_model)
+        self.ffwd = FeedForward(config)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+
+
+class SportsGPT(nn.Module):
+    """Decoder-only GPT language model built from scratch for sports commentary."""
+
+    def __init__(self, config: GPTConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.embeddings = TokenAndPositionalEmbedding(
+            vocab_size=config.vocab_size,
+            block_size=config.block_size,
+            d_model=config.d_model,
+            dropout=config.dropout,
+        )
+        self.blocks = nn.ModuleList([TransformerBlock(config) for _ in range(config.n_layers)])
+        self.ln_f = nn.LayerNorm(config.d_model)
+        self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+
+        # Weight tying between token embedding matrix and output projection reduces parameters
+        # and accelerates convergence on compact corpora.
+        self.lm_head.weight = self.embeddings.token_emb.weight
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(
+        self,
+        idx: torch.Tensor,
+        targets: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        x = self.embeddings(idx)
+        for block in self.blocks:
+            x = block(x)
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
+
+    @torch.no_grad()
+    def generate(
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 0.8,
+        top_k: int | None = 40,
+        top_p: float | None = 0.9,
+        greedy: bool = False,
+    ) -> torch.Tensor:
+        """Autoregressively append up to `max_new_tokens` token IDs to `idx`."""
+        was_training = self.training
+        self.eval()
+        try:
+            for _ in range(max_new_tokens):
+                idx_cond = idx[:, -self.config.block_size :]
+                logits, _ = self(idx_cond)
+                next_logits = logits[:, -1, :]
+                next_token = sample_next_token(
+                    next_logits,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                    greedy=greedy,
+                )
+                idx = torch.cat((idx, next_token), dim=1)
+        finally:
+            if was_training:
+                self.train()
+        return idx
+
+
+def milestone_3(config: GPTConfig | None = None) -> dict[str, Any]:
+    """Milestone 3 entrypoint: construct SportsGPT and verify causal forward pass."""
+    cfg = config or GPTConfig()
+    model = SportsGPT(cfg)
+    dummy_idx = torch.randint(0, cfg.vocab_size, (2, 16), dtype=torch.long)
+    dummy_targets = torch.randint(0, cfg.vocab_size, (2, 16), dtype=torch.long)
+    logits, loss = model(dummy_idx, dummy_targets)
+    param_count = sum(p.numel() for p in model.parameters())
+    return {
+        "model": model,
+        "config": cfg,
+        "logits_shape": tuple(logits.shape),
+        "loss": float(loss.item()) if loss is not None else None,
+        "param_count": param_count,
+    }
 
 
 # --- Milestone 4: Train the GPT model using the sports text data.

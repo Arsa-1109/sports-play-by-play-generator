@@ -8,6 +8,8 @@ from pathlib import Path
 from app.core import ARTICLE_BOUNDARY, load_corpus, milestone_1, normalize_text, prepare_corpus_text, train_val_split
 import torch
 from app.core import BPETokenizer, TokenAndPositionalEmbedding, milestone_2
+import math
+from app.core import CausalSelfAttention, GPTConfig, milestone_3
 
 # Milestone 1: Gather a small corpus of sports commentary or news articles.
 def test_milestone_1(tmp_path: Path):
@@ -73,9 +75,26 @@ def test_milestone_2():
 
 
 # Milestone 3: Build the causal self-attention mechanism and assemble the transformer block.
-@pytest.mark.skip(reason="remove this line when you start milestone 3")
 def test_milestone_3():
-    raise NotImplementedError("write the test for milestone 3")
+    cfg = GPTConfig(vocab_size=300, block_size=32, d_model=64, n_heads=4, n_layers=2, dropout=0.0)
+    attn = CausalSelfAttention(cfg)
+    attn.eval()
+
+    # Verify strict causality: perturbing future token at index 5 must not alter output at indices 0..4
+    x1 = torch.randn(1, 8, cfg.d_model)
+    x2 = x1.clone()
+    x2[:, 5:, :] += 10.0
+    with torch.no_grad():
+        y1 = attn(x1)
+        y2 = attn(x2)
+    assert torch.allclose(y1[:, :5, :], y2[:, :5, :], atol=1e-6)
+    assert not torch.allclose(y1[:, 5:, :], y2[:, 5:, :], atol=1e-4)
+
+    # Full SportsGPT causal check + forward shapes
+    m3 = milestone_3(cfg)
+    assert m3["logits_shape"] == (2, 16, 300)
+    assert m3["loss"] is not None and math.isfinite(m3["loss"])
+    assert m3["param_count"] > 0
 
 
 # Milestone 4: Train the GPT model using the sports text data.
